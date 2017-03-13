@@ -255,7 +255,7 @@ int main(int argc, char *argv[])
 		for (i = 0; i < wndSize; i++)
 		{
 			// Check if the entry is valid and that it hasn't been acked
-			if (wndSeqs[i] != -1 0 && ACKed[i] == -1)
+			if (wndSeqs[i] != -1 && ACKed[i] == -1)
 			{
 				before = timers[i];
 				difference = difftime(now, before);
