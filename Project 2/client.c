@@ -75,6 +75,8 @@ int main(int argc, char *argv[])
 	sendPacket(fd, buf, strlen(buf), (struct sockaddr *)&servAddr, servAddrLen, 0, wnd, 0, 1, 0);
 	getPacket(fd, buf, &len, (struct sockaddr *)&servAddr, &servAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
 	fprintf(stdout, "Received Contents:\n%s\n\n", buf);
+
+	sendPacket(fd, buf, 0, (struct sockaddr *)&servAddr, servAddrLen, seqNum+1, wnd, 0, 1, 0);
 	
 	
 	close(fd);

@@ -90,8 +90,9 @@ int main(int argc, char *argv[])
 		perror("ERROR: getsockname failed");
 		return -1;
 	}
-	/***************************************************************************************
-	/*
+
+
+	/*******************************************************************************************************************************/
 	// SYN/SYNACK handshake
 	// Get the SYN and initial sequence number
 	recvLen = getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
@@ -103,7 +104,7 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	fprintf(stdout, "Received messages from %s:%d\n\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port));
+	fprintf(stdout, "Client Information: %s:%d\n\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port));
 
 	// Check if the first message was a SYN message
 	if (syn != 1)
@@ -124,7 +125,7 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	fprintf(stdout, "Sending SYN ACK\n");
-	*/
+	/*******************************************************************************************************************************/
 
 
 	// Get the name of the requested file
@@ -136,7 +137,7 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	
-	fprintf(stdout, "Received request from %s:%d\nRequested File Name: %s\n\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port), buf);
+	fprintf(stdout, "Requested File Name: %s\n\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port), buf);
 
 	// Get a file pointer
 	char* fileContents;
@@ -288,7 +289,7 @@ int main(int argc, char *argv[])
 		if (fin == 1)
 		{
 			fprintf(stdout, "Receiving packet %i FIN\n", seqNum);
-			break;
+			goto receivedFIN;
 		}
 		for (i = 0; i < wndSize; i++)
 		{
@@ -334,7 +335,7 @@ int main(int argc, char *argv[])
 			fin = 1;
 			sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, sendBase, wnd, 0, 0, fin);
 			fprintf(stdout, "Sending packet %i %i FIN\n", seqNum, wnd);
-			break;
+			goto getFIN;
 		}
 
 		timeout:
@@ -390,9 +391,32 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	/* TODO:
-		Closing TCP Connection: Client sends TCP FIN; Server receives FIN, replies with ACK, closes connection, sends FIN; Client receives ACK+FIN, replies with ACK; Server receives ACK, closes
-	*/
+	
+
+	
+	//Closing TCP Connection: Client sends Server a FIN; Server receives FIN, replies with ACK and then replies with FIN; Client receives ACK+FIN, replies with ACK; Server receives ACK, closes
+	getFIN:
+	getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
+	if (fin == 1)
+	{
+		fprintf(stdout, "Receiving packet %i FIN\n", seqNum);
+	}
+
+	receivedFIN:
+	// Now that the client sent the FIN, we send the ACK to the client's FIN
+	sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, wnd, 0, 0, 0);
+	fprintf(stdout, "Sending packet %i %i\n", seqNum, wnd);
+
+	seqNum += HEADER_SIZE;
+
+	// After sending the ACK, we now send a FIN
+	sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, wnd, 0, 0, 1);
+	fprintf(stdout, "Sending packet %i %i FIN\n", seqNum, wnd);
+
+	// Now we get the last ACK and we are done
+	getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
+	fprintf(stdout, "Receiving packet %i\n", seqNum);
+
 
 	free(wndSeqs);
 	free(timers);
