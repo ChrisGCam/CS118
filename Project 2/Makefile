@@ -1,8 +1,8 @@
 CC=gcc
 
 default: client.c server.c
-	$(CC) server.c -o server
-	$(CC) client.c -o client
+	$(CC) server.c -o server -lrt
+	$(CC) client.c -o client -lrt
 
 clean:
 	rm server client

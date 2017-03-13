@@ -76,14 +76,14 @@ int main(int argc, char *argv[])
 	getPacket(fd, buf, &len, (struct sockaddr *)&servAddr, &servAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
 	fprintf(stdout, "Received Contents:\n%s\n\n", buf);
 
-	sendPacket(fd, buf, 0, (struct sockaddr *)&servAddr, servAddrLen, seqNum+1, wnd, 0, 1, 0);
+	//sendPacket(fd, buf, 0, (struct sockaddr *)&servAddr, servAddrLen, seqNum+1, wnd, 0, 1, 0);
 	
 	
 	close(fd);
 	return 0;
 }
 
-
+// message is the payload bytes, and len is the length of the payload bytes
 int sendPacket(int sockfd, char* message, size_t len, const struct sockaddr *dest_addr, socklen_t dest_len, int seqNum, int wnd, int ret, int syn, int fin)
 {
 
@@ -120,8 +120,7 @@ int sendPacket(int sockfd, char* message, size_t len, const struct sockaddr *des
 	return result;
 }
 
-// Wrapper function for recvfrom that also gets the header contents from the packet
-// Also gets the sock address of the sender
+// Wrapper function for recvfrom that also gets the header contents from the packet and copies them into the corresponding parameters
 int getPacket(int sockfd, char* message, size_t* len, struct sockaddr *src_addr, socklen_t * src_len, int* seqNum, int* wnd, int* ret, int* syn, int* fin)
 {
 
