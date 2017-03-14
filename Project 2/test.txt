@@ -1,2 +1,379 @@
-sdafsgdskjfgnfdjskvdfksjvdfsdfjksafdsf
-dsadsgfds
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <time.h>
+#include <sys/select.h>
+
+const int MAX_PACKET_SIZE = 1024;
+int HEADER_SIZE = 24;
+int MAX_PAYLOAD_SIZE = 1000;
+const int RTOTime = 500;
+const int MAX_SEQ_NUM = 30720;
+
+// For UDP socket programming, the following tutorial was used: https://www.cs.rutgers.edu/~pxk/417/notes/sockets/udp.html
+// For select(), the following tutorial was used: http://beej.us/guide/bgnet/output/html/multipage/selectman.html
+
+/*
+TODO:	Array of ACK numbers expected
+		Make sure last seq num is correct (must be value of the last ACK)
+*/
+
+int main(int argc, char *argv[])
+{
+
+	// Check for correct argument length
+	if (argc != 2) {
+		fprintf(stderr, "ERROR: incorrect arguments.\n");
+		exit(1);
+	}
+	
+	// There's 6 integers in teh header
+	HEADER_SIZE = sizeof(int) * 6;
+	MAX_PAYLOAD_SIZE = MAX_PACKET_SIZE - HEADER_SIZE;
+
+	struct sockaddr_in myAddr, clientAddr;
+	socklen_t myAddrLen = sizeof(myAddr);
+	socklen_t clientAddrLen = sizeof(clientAddr);
+	int portno, recvLen, sendLen, i;
+	char buf[MAX_PACKET_SIZE];
+
+	int len = 0, seqNum = 0, wnd = 5120, ret = 0, syn = 0, fin = 0;
+	int fd;
+	
+	// How many packets can fit in wnd
+	int wndSize;
+
+	// The byte location of the file for the sent packets
+	int * fileLocs;
+	// The seq numbers of the sent packets
+	int * wndSeqs;
+	// The expected ACK numbers for the corresponding packet
+	int * ACKNums;
+	// Whether or not the packet was acked; If ACKed, set to the ACK number
+	int * ACKed;
+	// The RTO  timers for individual packets
+	struct timespec * timers;
+	
+
+	// Get the portnumber
+	portno = atoi(argv[1]);
+	if(portno < 0)
+	{
+		fprintf(stderr, "ERROR: Invalid port number\n");
+		exit(-1);
+	}
+	
+
+	/****************************************************************************************/
+	// Establish UDP connection
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		fprintf(stderr, "ERROR: Socket creation failed\n");
+		exit(-1);
+	}
+	
+	#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <time.h>
+#include <sys/select.h>
+
+const int MAX_PACKET_SIZE = 1024;
+int HEADER_SIZE = 24;
+int MAX_PAYLOAD_SIZE = 1000;
+const int RTOTime = 500;
+const int MAX_SEQ_NUM = 30720;
+
+// For UDP socket programming, the following tutorial was used: https://www.cs.rutgers.edu/~pxk/417/notes/sockets/udp.html
+// For select(), the following tutorial was used: http://beej.us/guide/bgnet/output/html/multipage/selectman.html
+
+/*
+TODO:	Array of ACK numbers expected
+		Make sure last seq num is correct (must be value of the last ACK)
+*/
+
+int main(int argc, char *argv[])
+{
+
+	// Check for correct argument length
+	if (argc != 2) {
+		fprintf(stderr, "ERROR: incorrect arguments.\n");
+		exit(1);
+	}
+	
+	// There's 6 integers in teh header
+	HEADER_SIZE = sizeof(int) * 6;
+	MAX_PAYLOAD_SIZE = MAX_PACKET_SIZE - HEADER_SIZE;
+
+	struct sockaddr_in myAddr, clientAddr;
+	socklen_t myAddrLen = sizeof(myAddr);
+	socklen_t clientAddrLen = sizeof(clientAddr);
+	int portno, recvLen, sendLen, i;
+	char buf[MAX_PACKET_SIZE];
+
+	int len = 0, seqNum = 0, wnd = 5120, ret = 0, syn = 0, fin = 0;
+	int fd;
+	
+	// How many packets can fit in wnd
+	int wndSize;
+
+	// The byte location of the file for the sent packets
+	int * fileLocs;
+	// The seq numbers of the sent packets
+	int * wndSeqs;
+	// The expected ACK numbers for the corresponding packet
+	int * ACKNums;
+	// Whether or not the packet was acked; If ACKed, set to the ACK number
+	int * ACKed;
+	// The RTO  timers for individual packets
+	struct timespec * timers;
+	
+
+	// Get the portnumber
+	portno = atoi(argv[1]);
+	if(portno < 0)
+	{
+		fprintf(stderr, "ERROR: Invalid port number\n");
+		exit(-1);
+	}
+	
+
+	/****************************************************************************************/
+	// Establish UDP connection
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		fprintf(stderr, "ERROR: Socket creation failed\n");
+		exit(-1);
+	}
+
+	
+	#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <time.h>
+#include <sys/select.h>
+
+const int MAX_PACKET_SIZE = 1024;
+int HEADER_SIZE = 24;
+int MAX_PAYLOAD_SIZE = 1000;
+const int RTOTime = 500;
+const int MAX_SEQ_NUM = 30720;
+
+// For UDP socket programming, the following tutorial was used: https://www.cs.rutgers.edu/~pxk/417/notes/sockets/udp.html
+// For select(), the following tutorial was used: http://beej.us/guide/bgnet/output/html/multipage/selectman.html
+
+/*
+TODO:	Array of ACK numbers expected
+		Make sure last seq num is correct (must be value of the last ACK)
+*/
+
+int main(int argc, char *argv[])
+{
+
+	// Check for correct argument length
+	if (argc != 2) {
+		fprintf(stderr, "ERROR: incorrect arguments.\n");
+		exit(1);
+	}
+	
+	// There's 6 integers in teh header
+	HEADER_SIZE = sizeof(int) * 6;
+	MAX_PAYLOAD_SIZE = MAX_PACKET_SIZE - HEADER_SIZE;
+
+	struct sockaddr_in myAddr, clientAddr;
+	socklen_t myAddrLen = sizeof(myAddr);
+	socklen_t clientAddrLen = sizeof(clientAddr);
+	int portno, recvLen, sendLen, i;
+	char buf[MAX_PACKET_SIZE];
+
+	int len = 0, seqNum = 0, wnd = 5120, ret = 0, syn = 0, fin = 0;
+	int fd;
+	
+	// How many packets can fit in wnd
+	int wndSize;
+
+	// The byte location of the file for the sent packets
+	int * fileLocs;
+	// The seq numbers of the sent packets
+	int * wndSeqs;
+	// The expected ACK numbers for the corresponding packet
+	int * ACKNums;
+	// Whether or not the packet was acked; If ACKed, set to the ACK number
+	int * ACKed;
+	// The RTO  timers for individual packets
+	struct timespec * timers;
+	
+
+	// Get the portnumber
+	portno = atoi(argv[1]);
+	if(portno < 0)
+	{
+		fprintf(stderr, "ERROR: Invalid port number\n");
+		exit(-1);
+	}
+	
+
+	/****************************************************************************************/
+	// Establish UDP connection
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		fprintf(stderr, "ERROR: Socket creation failed\n");
+		exit(-1);
+	}
+	
+	#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <time.h>
+#include <sys/select.h>
+
+const int MAX_PACKET_SIZE = 1024;
+int HEADER_SIZE = 24;
+int MAX_PAYLOAD_SIZE = 1000;
+const int RTOTime = 500;
+const int MAX_SEQ_NUM = 30720;
+
+// For UDP socket programming, the following tutorial was used: https://www.cs.rutgers.edu/~pxk/417/notes/sockets/udp.html
+// For select(), the following tutorial was used: http://beej.us/guide/bgnet/output/html/multipage/selectman.html
+
+/*
+TODO:	Array of ACK numbers expected
+		Make sure last seq num is correct (must be value of the last ACK)
+*/
+
+int main(int argc, char *argv[])
+{
+
+	// Check for correct argument length
+	if (argc != 2) {
+		fprintf(stderr, "ERROR: incorrect arguments.\n");
+		exit(1);
+	}
+	
+	// There's 6 integers in teh header
+	HEADER_SIZE = sizeof(int) * 6;
+	MAX_PAYLOAD_SIZE = MAX_PACKET_SIZE - HEADER_SIZE;
+
+	struct sockaddr_in myAddr, clientAddr;
+	socklen_t myAddrLen = sizeof(myAddr);
+	socklen_t clientAddrLen = sizeof(clientAddr);
+	int portno, recvLen, sendLen, i;
+	char buf[MAX_PACKET_SIZE];
+
+	int len = 0, seqNum = 0, wnd = 5120, ret = 0, syn = 0, fin = 0;
+	int fd;
+	
+	// How many packets can fit in wnd
+	int wndSize;
+
+	// The byte location of the file for the sent packets
+	int * fileLocs;
+	// The seq numbers of the sent packets
+	int * wndSeqs;
+	// The expected ACK numbers for the corresponding packet
+	int * ACKNums;
+	// Whether or not the packet was acked; If ACKed, set to the ACK number
+	int * ACKed;
+	// The RTO  timers for individual packets
+	struct timespec * timers;
+	
+
+	// Get the portnumber
+	portno = atoi(argv[1]);
+	if(portno < 0)
+	{
+		fprintf(stderr, "ERROR: Invalid port number\n");
+		exit(-1);
+	}
+	
+
+	/****************************************************************************************/
+	// Establish UDP connection
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		fprintf(stderr, "ERROR: Socket creation failed\n");
+		exit(-1);
+	}
+
+	
+	#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <time.h>
+#include <sys/select.h>
+
+const int MAX_PACKET_SIZE = 1024;
+int HEADER_SIZE = 24;
+int MAX_PAYLOAD_SIZE = 1000;
+const int RTOTime = 500;
+const int MAX_SEQ_NUM = 30720;
+
+// For UDP socket programming, the following tutorial was used: https://www.cs.rutgers.edu/~pxk/417/notes/sockets/udp.html
+// For select(), the following tutorial was used: http://beej.us/guide/bgnet/output/html/multipage/selectman.html
+
+/*
+TODO:	Array of ACK numbers expected
+		Make sure last seq num is correct (must be value of the last ACK)
+*/
+
+int main(int argc, char *argv[])
+{
+
+	// Check for correct argument length
+	if (argc != 2) {
+		fprintf(stderr, "ERROR: incorrect arguments.\n");
+		exit(1);
+	}
+	
+	// There's 6 integers in teh header
+	HEADER_SIZE = sizeof(int) * 6;
+	MAX_PAYLOAD_SIZE = MAX_PACKET_SIZE - HEADER_SIZE;
+
+	struct sockaddr_in myAddr, clientAddr;
+	socklen_t myAddrLen = sizeof(myAddr);
+	socklen_t clientAddrLen = sizeof(clientAddr);
+	int portno, recvLen, sendLen, i;
+	char buf[MAX_PACKET_SIZE];
+
+	int len = 0, seqNum = 0, wnd = 5120, ret = 0, syn = 0, fin = 0;
+	int fd;
+	
+	// How many packets can fit in wnd
+	int wndSize;
+	
+	

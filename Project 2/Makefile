@@ -5,4 +5,4 @@ default: client.c server.c
 	$(CC) client.c -o client -lrt
 
 clean:
-	rm server client
+	rm server client received.data

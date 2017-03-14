@@ -9,13 +9,13 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <time.h>
-#include <signal.h>
 #include <sys/select.h>
 
 const int MAX_PACKET_SIZE = 1024;
 int HEADER_SIZE = 24;
 int MAX_PAYLOAD_SIZE = 1000;
 const int RTOTime = 500;
+const int MAX_SEQ_NUM = 30720;
 
 // For UDP socket programming, the following tutorial was used: https://www.cs.rutgers.edu/~pxk/417/notes/sockets/udp.html
 // For select(), the following tutorial was used: http://beej.us/guide/bgnet/output/html/multipage/selectman.html
@@ -41,21 +41,25 @@ int main(int argc, char *argv[])
 	char buf[MAX_PACKET_SIZE];
 
 	int len = 0, seqNum = 0, wnd = 5120, ret = 0, syn = 0, fin = 0;
+	unsigned int fileStart = 0;
 	int fd;
-	int numACKsRcvd = 0;
-	
-	// The current window will be the range (sendBase, sendBase + wnd)
-	int sendBase = 0;
+	int newSeq;
 
 	// How many packets can fit in wnd
 	int wndSize;
 
 	// The byte location of the file for the sent packets
-	int * fileLocs;
-	// The seq numbers of the sent packets (needed to match with incomingACKs)
+	unsigned int * fileLocs;
+	// The byte location of the next payload
+	unsigned int * fileLocsEnd;
+	// The seq numbers of the sent packets
 	int * wndSeqs;
+	// The expected ACK numbers for the corresponding packet
+	int * ACKNums;
 	// Whether or not the packet was acked; If ACKed, set to the ACK number
 	int * ACKed;
+	// The length of the payloads
+	int * PLLengths;
 	// The RTO  timers for individual packets
 	struct timespec * timers;
 	
@@ -92,49 +96,38 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	
+	fprintf(stdout, "Awaiting client connection request...\n");
+
+
+getSYN:
 	/*******************************************************************************************************************************/
-	// SYN/SYNACK handshake
+	// SYN/SYN-ACK handshake
 	// Get the SYN and initial sequence number
-	recvLen = getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
+	recvLen = getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &syn, &fin, &fileStart);
 	
-	// Error check on getPacket
-	if (recvLen < 0)
-	{
-		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, 0, 0, 0, 1);
-		perror("ERROR: Processing SYN failed\n");
-		return -1;
-	}
-
-	fprintf(stdout, "Client Information: %s:%d\n\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port));
-
 	// Check if the first message was a SYN message
 	if (syn != 1)
 	{
-		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, 0, 0, 0, 1);
-		perror("ERROR: First packet received was not a SYN\n");
-		return -1;
+		goto getSYN;
 	}
+	else
+		fprintf(stdout, "Client Information: %s:%d\n\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port));
 
 	fprintf(stdout, "Receiving packet %i %i SYN\n", seqNum, wnd);
 	
 	ret = 0;
-	sendSYNACK:
+sendSYNACK:
 	// Send SYN ACK
-	sendLen = sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, 0, ret, 1, 0);
-	if (sendLen < 0)
-	{
-		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, 0, 0, 0, 1);
-		perror("ERROR: Sending SYN ACK\n");
-		return -1;
-	}
+	sendLen = sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, wnd, 1, 0, 0);
+	
 	// If this is not a retransmission
 	if(ret == 0)
-		fprintf(stdout, "Sending packet %i %i SYN/ACK\n", seqNum, wnd);
+		fprintf(stdout, "Sending packet %i %i SYN-ACK\n", seqNum, wnd);
 	// If this is a retransmission
 	else
-		fprintf(stdout, "Sending packet %i %i Retransmission SYN/ACK\n", seqNum, wnd);
+		fprintf(stdout, "Sending packet %i %i Retransmission SYN-ACK\n", seqNum, wnd);
 
+	
 	// Set up a timeout timer to resend FIN ACK if we don't get the file request in time
 	fd_set readfds;
 	struct timeval tv;
@@ -150,17 +143,17 @@ int main(int argc, char *argv[])
 	}
 	/*******************************************************************************************************************************/
 
-
+getFileName:
 	// Get the name of the requested file
-	recvLen = getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
-	if (recvLen < 0)
-	{
-		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, wnd, 0, 0, 1);
-		perror("ERROR: Receiving file name\n");
-		return -1;
-	}
+	recvLen = getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &syn, &fin, &fileStart);
+	if (syn == 1 || seqNum != 1)
+		goto sendSYNACK;
 	
-	fprintf(stdout, "Requested File Name: %s\n\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port), buf);
+	fprintf(stdout, "Requested File Name: %s\n\n", buf);
+
+	// Calculate how many packets fit in the window and allocate space to keep an array of what has been ACKed in the current window
+	wndSize = wnd / MAX_PACKET_SIZE;
+
 
 	// Get a file pointer
 	char* fileContents;
@@ -168,9 +161,9 @@ int main(int argc, char *argv[])
 
 	if (fp == NULL)
 	{
-		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, wnd, 0, 0, 1);
+		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, wnd, 0, 1, 0);
 		perror("ERROR: File not found\n");
-		exit(1);
+		goto getFIN;
 	}
 
 	// Get the file size
@@ -181,75 +174,95 @@ int main(int argc, char *argv[])
 
 	if (fileSize == 0)
 	{
-		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, wnd, 0, 0, 1);
+		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, wnd, 0, 1, 0);
 		perror("ERROR: File is empty\n");
-		exit(1);
+		goto getFIN;
 	}
 
 	// Allocate space for the file + 1 for a null byte terminator
 	fileContents = malloc(fileSize + 1);
 	if (fileContents == NULL)
 	{
-		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, wnd, 0, 0, 1);
+		sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, 0, wnd, 0, 1, 0);
 		perror("ERROR: Allocating buffer for file contents\n");
-		exit(1);
+		goto getFIN;
 	}
 
 	// Copy the contents of the file into fileContents and null byte terminate it
 	size_t fileLen = fread(fileContents, 1, fileSize, fp);
 	fileContents[fileLen] = '\0';
 	
-
-	// Calculate how many packets fit in the window and allocate space to keep an array of what has been ACKed in the current window
-	wndSize = wnd / MAX_PACKET_SIZE;
-	if (wnd % MAX_PACKET_SIZE > 0)
-		wndSize++;
-
 	// Allocate space in the arrays
 	wndSeqs = (int*)malloc(sizeof(int) * wndSize);
+	ACKNums = (int*)malloc(sizeof(int) * wndSize);
 	ACKed = (int*)malloc(sizeof(int) * wndSize);
-	fileLocs = (int*)malloc(sizeof(int) * wndSize);
+	fileLocs = (unsigned int*)malloc(sizeof(unsigned int) * wndSize);
+	PLLengths = (int*)malloc(sizeof(int) * wndSize);
 	timers = (struct timespec*)malloc(sizeof(struct timespec) * wndSize);
+	fileLocsEnd = (unsigned int*)malloc(sizeof(unsigned int) * wndSize);
 
-	// Set all the timers, ACKs, and seq numbers to -1
+	// Set all the ACKs, file locations, and seq numbers to -1
 	for (i = 0; i < wndSize; i++)
 	{
 		ACKed[i] = -1;
 		wndSeqs[i] = -1;
-		fileLocs[i] = -1;
+		fileLocs[i] = 0;
+		ACKNums[i] = -1;
+		PLLengths[i] = -1;
+		fileLocsEnd[i] = 0;
 	}
 
+	ret = 0;
 	
 	// Number of packets sent in the current window
 	int packetsSent = 0;
 
+	// Total number of ACKs received
+	int numACKsRcvd = 0;
+
+	// The current window will be the range (sendBase, sendBase + wnd)
+	int sendBase = 0;
+
 	// The byte of the file that corresponds to to current sendBase
 	// This is different from sendBase because seq includes header bytes (i.e. is incremented by 1024 on each packet), 
-	// but currLoc just keeps track of payload bytes (only 1000 bytes of the file are sent at a time)
-	int currLoc = 0;
+	// but fileBase just keeps track of payload bytes (only 1000 bytes of the file are sent at a time)
+	int fileBase = 0;
 
+	/*
+	FILE* fp2 = fopen("sender.data", "w");
+
+	if (fp2 == NULL)
+	{
+		printf("ERROR: received.data file creation\n");
+		exit(1);
+	}
+	*/
 	// While a fin message isn't sent/received yet...
 	while (fin == 0)
 	{
+		unsigned int fileOffset = fileBase + packetsSent * MAX_PAYLOAD_SIZE;
 		// Send the packets in the current window
-		while (currLoc < fileLen && packetsSent < wndSize)
+		while (fileOffset < fileLen && packetsSent < wndSize)
 		{
 			// Calculate the sequence number of this packet % 30720 (since that is the max sequence number)
-			seqNum = (sendBase + packetsSent * MAX_PACKET_SIZE) % 30720;
+			seqNum = (sendBase + packetsSent * MAX_PACKET_SIZE) % MAX_SEQ_NUM;
 
-			// Initialize packetSize as the largest possible packet size
-			int packetSize = MAX_PACKET_SIZE;
+			// Initialize payloadSize as the largest possible payload size
+			int payloadSize = MAX_PAYLOAD_SIZE;
 
 			// On the last packet, send fewer bytes if needed
-			if (fileLen - currLoc < MAX_PAYLOAD_SIZE)
-				packetSize = fileLen - currLoc + HEADER_SIZE;
-
+			if (fileLen - fileOffset < MAX_PAYLOAD_SIZE)
+				payloadSize = fileLen - fileOffset;
+			
 			// Make an buffer for the packet we're sending and send it
-			char toSend[packetSize];
-			bzero(toSend, packetSize);
-			memcpy(toSend, fileContents + currLoc, packetSize);
-			sendPacket(fd, toSend, packetSize, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, wnd, 0, 0, 0);
+			char toSend[payloadSize];
+			bzero(toSend, payloadSize);
+			memcpy(toSend, fileContents + fileOffset, payloadSize);
+			sendPacket(fd, toSend, payloadSize, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, wnd, 0, 0, fileOffset);
 			fprintf(stdout, "Sending packet %i %i\n", seqNum, wnd);
+
+			//fseek(fp2, fileOffset, SEEK_SET);
+			//fwrite(toSend, sizeof(char), payloadSize, fp2);
 
 			// Start the timer
 			clock_gettime(CLOCK_MONOTONIC_RAW, &timers[packetsSent]);
@@ -257,13 +270,17 @@ int main(int argc, char *argv[])
 			ACKed[packetsSent] = -1;
 			// Set the sequence number of this packet
 			wndSeqs[packetsSent] = seqNum;
+			// Set the expected ACK value for this packet
+			ACKNums[packetsSent] = (seqNum + payloadSize + HEADER_SIZE) % MAX_SEQ_NUM;
 			// Set the starting byte of the sent file contents
-			fileLocs[packetsSent] = currLoc;
-
-			// Advance the location of the file we need to send
-			currLoc += packetSize - HEADER_SIZE;
+			fileLocs[packetsSent] = fileOffset;
+			// Set the length of the payload in the array
+			PLLengths[packetsSent] = payloadSize;
+			fileLocsEnd[packetsSent] = fileOffset + payloadSize;
+	
 			// Increment the number of packets we sent in this current window
 			packetsSent++;
+			fileOffset = fileBase + packetsSent * MAX_PAYLOAD_SIZE;
 		}
 		
 		// Get the time of the oldest packet
@@ -291,7 +308,11 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		// Set up a timer based on the oldest packet to break out of getPacket if needed
+		// If any packet is already timed out
+		if (oldestTime > RTOTime)
+			goto timeout;
+
+		// Set up a timer based on the oldest packet to break out of getPacket on the timeout
 		fd_set readfds;
 		struct timeval tv;
 		FD_ZERO(&readfds);
@@ -304,29 +325,42 @@ int main(int argc, char *argv[])
 			goto timeout;
 		}
 
+		int retLen, retSeqNum, retWnd, retSyn, retFin;
 		// Try to get ACKs from client and use select() to timeout on the oldest package
-		getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
+		getPacket(fd, buf, &retLen, (struct sockaddr *)&clientAddr, &clientAddrLen, &retSeqNum, &retWnd, &retSyn, &retFin, &fileStart);
+		fin = retFin;
+		seqNum = retSeqNum;
 		if (fin == 1)
 		{
+			ret = 0;
 			fprintf(stdout, "Receiving packet %i FIN\n", seqNum);
 			goto sendFINACK;
 		}
+		else
+		{
+			fprintf(stdout, "Receiving packet %i\n", retSeqNum);
+		}
 		for (i = 0; i < wndSize; i++)
 		{
-			if (wndSeqs[i] + 1 == seqNum)
+			if (ACKNums[i] == retSeqNum)
 			{
-				fprintf(stdout, "Receiving packet %i\n", seqNum);
-				ACKed[i] = seqNum;
-				numACKsRcvd++;
+				ACKed[i] = retSeqNum;
 				break;
 			}
 		}
-
+		
 		// While the first packet in the array has been ACKed
 		while (ACKed[0] != -1)
 		{
+			// Slides the location of the file we send next
+			fileBase = fileLocsEnd[0];
+			
+			numACKsRcvd++;
+			// Calculate the new base for file contents
+			int payloadLen = PLLengths[0];
+
 			// Set the new send base
-			sendBase = ACKed[0];
+			sendBase = ACKNums[0];
 			// We must now send one more new packet
 			packetsSent--;
 
@@ -337,23 +371,27 @@ int main(int argc, char *argv[])
 				ACKed[i] = ACKed[i + 1];
 				wndSeqs[i] = wndSeqs[i + 1];
 				fileLocs[i] = fileLocs[i + 1];
+				ACKNums[i] = ACKNums[i + 1];
+				PLLengths[i] = PLLengths[i + 1];
+				fileLocsEnd[i] = fileLocsEnd[i + 1];
 			}
 
 			// And empty out the last entry
 			ACKed[wndSize - 1] = -1;
 			wndSeqs[wndSize - 1] = -1;
-			fileLocs[wndSize - 1] = -1;
+			fileLocs[wndSize - 1] = 0;
+			ACKNums[wndSize - 1] = -1;
+			PLLengths[wndSize - 1] = -1;
+			fileLocsEnd[wndSize - 1] = 0;
 		}
-		
-		// Update the currLoc since we got an ack
-		currLoc = numACKsRcvd * MAX_PACKET_SIZE;
-
+					
 		// If we're done transferring the file, send a FIN and commence FIN/ACK
-		if (currLoc >= fileLen)
+		if (fileBase >= fileLen)
 		{
 			fin = 1;
-			sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, sendBase, wnd, 0, 0, fin);
-			fprintf(stdout, "Sending packet %i %i FIN\n", seqNum, wnd);
+			sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, sendBase, wnd, 1, fin, 0);
+			fprintf(stdout, "Sending packet %i %i FIN\n", sendBase, wnd);
+			ret = 0;
 			goto getFIN;
 		}
 
@@ -378,29 +416,25 @@ int main(int argc, char *argv[])
 				{
 					// Retransmit this package
 					seqNum = wndSeqs[i];
-					int tempLoc = fileLocs[i];
+					unsigned int tempLoc = fileLocs[i];
 
-					// Initialize packetSize as the largest possible packet size
-					int packetSize = MAX_PACKET_SIZE;
-
-					// On the last packet, send fewer bytes if needed
-					if (fileLen - tempLoc < MAX_PAYLOAD_SIZE)
-						packetSize = fileLen - tempLoc + HEADER_SIZE;
+					int payloadSize = PLLengths[i];
 
 					// Make an buffer for the packet we're sending and send it
-					char toSend[packetSize];
-					bzero(toSend, packetSize);
-					memcpy(toSend, fileContents + tempLoc, packetSize);
+					char toSend[payloadSize];
+					bzero(toSend, payloadSize);
+					memcpy(toSend, fileContents + tempLoc, payloadSize);
 
 					// Send the retransmission
-					sendPacket(fd, toSend, packetSize, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, wnd, 1, 0, 0);
+					sendPacket(fd, toSend, payloadSize, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, wnd, 0, 0, tempLoc);
 					fprintf(stdout, "Sending packet %i %i Retransmission\n", seqNum, wnd);
+
+					//fseek(fp2, tempLoc, SEEK_SET);
+					//fwrite(toSend, sizeof(char), payloadSize, fp2);
+					//printf("DEBUG: %i %i\n", fileOffset, payloadSize);
 
 					// Start the timer again
 					clock_gettime(CLOCK_MONOTONIC_RAW, &timers[i]);
-
-					// Advance the location of the file we need to send
-					tempLoc += packetSize - HEADER_SIZE;
 
 				}
 			}
@@ -411,26 +445,54 @@ int main(int argc, char *argv[])
 	/******************************************************************************************************************************************************************************************/
 	// FIN/FINACK Handshake
 	//Closing TCP Connection: Client sends Server a FIN; Server receives FIN, replies with ACK and then replies with FIN; Client receives ACK+FIN, replies with ACK; Server receives ACK, closes
-	getFIN:
-	getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
-	if (fin == 1)
+
+sendFIN:
+	sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, sendBase, wnd, 1, 1, 0);
+	if(ret == 0)
+		fprintf(stdout, "Sending packet %i %i FIN\n", sendBase, wnd);
+	else
+		fprintf(stdout, "Sending packet %i %i Retransmission FIN\n", sendBase, wnd);
+	
+getFIN:
+	// Set up a timeout timer to resend FIN if needed (in case we timeout before we get the FIN)
+	FD_ZERO(&readfds);
+	FD_SET(fd, &readfds);
+	tv.tv_sec = 0;
+	tv.tv_usec = RTOTime * 1000;
+	rv = select(fd + 1, &readfds, NULL, NULL, &tv);
+	if (rv == 0)
+	{
+		ret = 1;
+		goto sendFIN;
+	}
+
+	getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &syn, &fin, &fileStart);
+	if (fin == 1 && seqNum == (sendBase + HEADER_SIZE) % MAX_SEQ_NUM)
 	{
 		fprintf(stdout, "Receiving packet %i FIN\n", seqNum);
+		ret = 0;
+		goto sendFINACK;
+	}
+	else
+	{
+		ret = 1;
+		goto sendFIN;
 	}
 
 	ret = 0;
 
-	sendFINACK:
+sendFINACK:
+	newSeq = (sendBase + HEADER_SIZE) % MAX_SEQ_NUM;
 	// Now that the client sent the FIN, we send the FIN ACK to the client's FIN
-	sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, seqNum, wnd, 1, 0, 1);
+	sendPacket(fd, buf, 0, (struct sockaddr *)&clientAddr, clientAddrLen, newSeq, wnd, 0, 1, 0);
 	// If it's not a retransmission
 	if(ret == 0)
-		fprintf(stdout, "Sending packet %i %i FIN/ACK\n", seqNum, wnd);
+		fprintf(stdout, "Sending packet %i %i FIN-ACK\n", newSeq, wnd);
 	// If it's a retransmission
 	else
-		fprintf(stdout, "Sending packet %i %i Retrnansmission FIN/ACK\n", seqNum, wnd);
+		fprintf(stdout, "Sending packet %i %i Retransmission FIN-ACK\n", newSeq, wnd);
 
-	// Set up a timeout timer to resend FIN ACK if needed (in case we timeout before we get the last ACK)
+	// Set up a timeout timer to resend FIN-ACK if needed (in case we timeout before we get the last ACK)
 	FD_ZERO(&readfds);
 	FD_SET(fd, &readfds);
 	tv.tv_sec = 0;
@@ -442,22 +504,41 @@ int main(int argc, char *argv[])
 		goto sendFINACK;
 	}
 
+getLastACK:
 	// Now we get the last ACK and we are done
-	getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &ret, &syn, &fin);
-	fprintf(stdout, "Receiving packet %i\n", seqNum);
-	/******************************************************************************************************************************************************************************************/
+	getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &syn, &fin, &fileStart);
+	if (seqNum != (newSeq + HEADER_SIZE) % MAX_SEQ_NUM)
+		goto sendFINACK;
 
+	fprintf(stdout, "Receiving packet %i\n", seqNum);
+	fprintf(stdout, "Closing the connection with the client...\n");
+	/******************************************************************************************************************************************************************************************/
+	
+	fprintf(stdout, "\n\nAwaiting new client connection request...\n");
+	
+	fclose(fp);
+	//fclose(fp2);
+	
+	goto getSYN;
+
+	free(fileContents);
 	free(wndSeqs);
 	free(timers);
 	free(ACKed);
+	
+	free(ACKNums);
+	free(PLLengths);
+	free(fileLocsEnd);
+	free(fileLocs);
+	
+
 	close(fd);
-	fclose(fp);
 	return 0;
 }
 
 
 // message is the payload bytes, and len is the length of the payload bytes
-int sendPacket(int sockfd, char* message, size_t len, const struct sockaddr *dest_addr, socklen_t dest_len, int seqNum, int wnd, int ret, int syn, int fin)
+int sendPacket(int sockfd, char* message, size_t len, const struct sockaddr *dest_addr, socklen_t dest_len, int seqNum, int wnd, int syn, int fin, unsigned int fileStart)
 {
 
 	int result = -1;
@@ -477,14 +558,15 @@ int sendPacket(int sockfd, char* message, size_t len, const struct sockaddr *des
 	memcpy(toSend, &len, intSize);
 	memcpy(toSend + intSize, &seqNum, intSize);
 	memcpy(toSend + intSize * 2, &wnd, intSize);
-	memcpy(toSend + intSize * 3, &ret, intSize);
-	memcpy(toSend + intSize * 4, &syn, intSize);
-	memcpy(toSend + intSize * 5, &fin, intSize);
-	memcpy(toSend + intSize * 6, message, len);
+	memcpy(toSend + intSize * 3, &syn, intSize);
+	memcpy(toSend + intSize * 4, &fin, intSize);
+	memcpy(toSend + intSize * 5, &fileStart, intSize);
+	memcpy(toSend + HEADER_SIZE, message, len);
 	result = sendto(sockfd, toSend, packetLen, 0, dest_addr, dest_len);
 	if (result < 0)
 	{
 		perror("sendto failed.");
+		free(toSend);
 		return -1;
 	}
 
@@ -494,7 +576,7 @@ int sendPacket(int sockfd, char* message, size_t len, const struct sockaddr *des
 }
 
 // Wrapper function for recvfrom that also gets the header contents from the packet and copies them into the corresponding parameters
-int getPacket(int sockfd, char* message, size_t* len, struct sockaddr *src_addr, socklen_t * src_len, int* seqNum, int* wnd, int* ret, int* syn, int* fin)
+int getPacket(int sockfd, char* message, size_t* len, struct sockaddr *src_addr, socklen_t * src_len, int* seqNum, int* wnd, int* syn, int* fin, unsigned int* fileStart)
 {
 
 	int result = -1;
@@ -507,17 +589,16 @@ int getPacket(int sockfd, char* message, size_t* len, struct sockaddr *src_addr,
 
 	result = recvfrom(sockfd, received, packetLen, 0, src_addr, src_len);
 
-	memcpy(message, received + 24, MAX_PAYLOAD_SIZE);
-
 	int intSize = sizeof(int);
 	
 	memcpy(len, received, intSize);
 	memcpy(seqNum, received + intSize, intSize);
 	memcpy(wnd, received + intSize*2, intSize);
-	memcpy(ret, received + intSize*3, intSize);
-	memcpy(syn, received + intSize*4, intSize);
-	memcpy(fin, received + intSize*5, intSize);
-	
+	memcpy(syn, received + intSize*3, intSize);
+	memcpy(fin, received + intSize*4, intSize);
+	memcpy(fileStart, received + intSize*5, intSize);
+	memcpy(message, received + HEADER_SIZE, MAX_PAYLOAD_SIZE);
+
 	free(received);
 
 	return result;
