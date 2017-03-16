@@ -29,20 +29,20 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "ERROR: incorrect arguments.\nUSAGE: ./client <port> <ip> <filename>\nSet <ip> to 1 for same machine\n");
 		exit(1);
 	}
-	
+
 	HEADER_SIZE = sizeof(int) * 6;
 	MAX_PAYLOAD_SIZE = MAX_PACKET_SIZE - HEADER_SIZE;
-	
+
 	struct sockaddr_in servAddr;
 	socklen_t servAddrLen = sizeof(servAddr);
 	int fd, portno, recvLen, i;
 	char buf[MAX_PACKET_SIZE];
-	
+
 	// Set the IP address to local machine
 	//char* IPAddress = "127.0.0.1";
 	char* IPAddress = malloc(50);
 	sprintf(IPAddress, "127.0.0.1");
-	
+
 	int len = 0, seqNum = 0, wnd = 5120, syn = 0, fin = 0, ret = 0;
 	unsigned int fileStart = 0;
 
@@ -57,33 +57,33 @@ int main(int argc, char *argv[])
 
 	// Get the portnumber
 	portno = atoi(argv[1]);
-	if(portno < 0)
+	if (portno < 0)
 	{
 		fprintf(stderr, "ERROR: invalid port number.\n");
 		exit(1);
 	}
-	
+
 	// If IP address is "1", then leave it as local machine IP address
 	// Otherwise record the IP address
-	if(strcmp(argv[2],"1") != 0)
+	if (strcmp(argv[2], "1") != 0)
 		sprintf(IPAddress, "%s", argv[2]);//IPAddress = argv[2];
-	
+
 	fd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (fd < 0) {
 		fprintf(stderr, "ERROR: socket creation failed.\n");
 		exit(1);
 	}
-	
+
 	bzero((char *)&servAddr, sizeof(servAddr));
 	servAddr.sin_family = AF_INET;
 	servAddr.sin_port = htons(portno);
 
-	if(inet_aton(IPAddress, &servAddr.sin_addr) == 0)
+	if (inet_aton(IPAddress, &servAddr.sin_addr) == 0)
 	{
 		fprintf(stderr, "ERROR: inet_aton() failed.\n");
 		exit(1);
 	}
-	
+
 	free(IPAddress);
 
 	// SYN/SYN-ACK Handshake
@@ -91,7 +91,7 @@ int main(int argc, char *argv[])
 sendSYN:
 	// Send the SYN with seqNum of 0
 	sendPacket(fd, buf, 0, (struct sockaddr *)&servAddr, servAddrLen, 0, wnd, 1, 0, 0);
-	if(ret == 0)
+	if (ret == 0)
 		fprintf(stdout, "Sending packet SYN\n");
 	else
 		fprintf(stdout, "Sending packet Retransmission SYN\n");
@@ -112,7 +112,7 @@ sendSYN:
 
 	// Get the SYNACK with seqNum 0
 	getPacket(fd, buf, &len, (struct sockaddr *)&servAddr, &servAddrLen, &seqNum, &wnd, &syn, &fin, &fileStart);
-	if(syn == 1 && seqNum == 0)
+	if (syn == 1 && seqNum == 0)
 		fprintf(stdout, "Receiving packet SYN-ACK\n");
 	else
 	{
@@ -122,13 +122,13 @@ sendSYN:
 	ret = 0;
 
 
-	
+
 	// Send the wanted file name with seqNum HEADER_SIZE + file name length
 sendFileName:
 	sprintf(buf, "%s", argv[3]);
 	//printf("DEBUG: %i\n", strlen(buf));
 	sendPacket(fd, buf, strlen(buf), (struct sockaddr *)&servAddr, servAddrLen, 0, wnd, 0, 0, 0);
-	if(ret == 0)
+	if (ret == 0)
 		fprintf(stdout, "Sending packet 0 FileName\n\n");
 	else
 		fprintf(stdout, "Sending packet 0 Retransmission FileName\n\n");
@@ -156,7 +156,7 @@ sendFileName:
 		printf("ERROR: received.data file creation\n");
 		exit(1);
 	}
-	
+
 	while (fin == 0)
 	{
 		bzero(buf, MAX_PACKET_SIZE);
@@ -164,7 +164,7 @@ sendFileName:
 
 		if (syn == 1 && fin == 0)
 			goto sendFileName;
-		else if(fin == 0)
+		else if (fin == 0)
 			fprintf(stdout, "Receiving packet %i\n", seqNum);
 		else
 		{
@@ -173,11 +173,11 @@ sendFileName:
 			seqNum %= MAX_SEQ_NUM;
 			break;
 		}
-		
+
 		int ACKNum = seqNum + len + HEADER_SIZE;
 		ACKNum %= MAX_SEQ_NUM;
 
-		
+
 		fseek(fp, fileStart, SEEK_SET);
 		fwrite(buf, sizeof(char), len, fp);
 
@@ -199,7 +199,7 @@ sendFileName:
 	// FIN/FIN-ACK Handshake
 sendFIN:
 	sendPacket(fd, buf, 0, (struct sockaddr *)&servAddr, servAddrLen, seqNum, wnd, 0, 1, 0);
-	if(ret == 0)
+	if (ret == 0)
 		printf("Sending packet %i FIN\n", seqNum);
 	else
 		printf("Sending packet %i Retransmission FIN\n", seqNum);
@@ -243,7 +243,7 @@ sendFIN:
 
 	int msecElapsed = 0;
 	clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-	
+
 	// During this time period, send ACKs to any last messages
 	while (msecElapsed < RTOTime * 4)
 	{
@@ -271,16 +271,16 @@ sendFIN:
 		}
 
 		getPacket(fd, buf, &len, (struct sockaddr *)&servAddr, &servAddrLen, &seqNum, &wnd, &syn, &fin, &fileStart);
-		if(fin == 1 && syn == 1 && seqNum == retSeqNum)
+		if (fin == 1 && syn == 1 && seqNum == retSeqNum)
 			printf("Receiving packet %i FIN-ACK\n", retSeqNum);
-		else if(fin == 1)
+		else if (fin == 1)
 			printf("Receiving packet %i FIN\n", seqNum);
 		else
 			printf("Receiving packet %i\n", seqNum);
 	}
-	
-	closeConn:
-	
+
+closeConn:
+
 	printf("Closing the connection...\n");
 
 	fclose(fp);
