@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/select.h>
+#include <netdb.h>
 
 // For UDP socket programming, the following tutorial was used: https://www.cs.rutgers.edu/~pxk/417/notes/sockets/udp.html
 // For select(), the following tutorial was used: http://beej.us/guide/bgnet/output/html/multipage/selectman.html
@@ -26,7 +27,7 @@ int main(int argc, char *argv[])
 {
 	// Check for correct argument length
 	if (argc != 4) {
-		fprintf(stderr, "ERROR: incorrect arguments.\nUSAGE: ./client <port> <ip> <filename>\nSet <ip> to 1 for same machine\n");
+		fprintf(stderr, "ERROR: incorrect arguments.\nUSAGE: ./client <port> <hostname> <filename>\nSet <ip> to 1 for same machine\n");
 		exit(1);
 	}
 
@@ -39,9 +40,6 @@ int main(int argc, char *argv[])
 	char buf[MAX_PACKET_SIZE];
 
 	// Set the IP address to local machine
-	//char* IPAddress = "127.0.0.1";
-	char* IPAddress = malloc(50);
-	sprintf(IPAddress, "127.0.0.1");
 
 	int len = 0, seqNum = 0, wnd = 5120, syn = 0, fin = 0, ret = 0;
 	unsigned int fileStart = 0;
@@ -52,8 +50,8 @@ int main(int argc, char *argv[])
 	for (i = 0; i < 10; i++)
 		transmitted[i] = -1;
 
-
-	struct timespec start, end;
+	struct timespec start, end, beginTransfer, endTransfer;
+	int totalFileLength = 0;
 
 	// Get the portnumber
 	portno = atoi(argv[1]);
@@ -63,28 +61,27 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	// If IP address is "1", then leave it as local machine IP address
-	// Otherwise record the IP address
-	if (strcmp(argv[2], "1") != 0)
-		sprintf(IPAddress, "%s", argv[2]);//IPAddress = argv[2];
-
 	fd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (fd < 0) {
 		fprintf(stderr, "ERROR: socket creation failed.\n");
+		exit(1);
+	}
+	
+	struct hostent * server;
+	server = gethostbyname(argv[2]);
+	if(server == NULL)
+	{
+		fprintf(stderr, "ERROR: invalid host name.\n");
 		exit(1);
 	}
 
 	bzero((char *)&servAddr, sizeof(servAddr));
 	servAddr.sin_family = AF_INET;
 	servAddr.sin_port = htons(portno);
+	memcpy(&servAddr.sin_addr.s_addr, server->h_addr, server->h_length);
 
-	if (inet_aton(IPAddress, &servAddr.sin_addr) == 0)
-	{
-		fprintf(stderr, "ERROR: inet_aton() failed.\n");
-		exit(1);
-	}
-
-	free(IPAddress);
+	// Get the time when we start attempting a connection
+	clock_gettime(CLOCK_MONOTONIC_RAW, &beginTransfer);
 
 	// SYN/SYN-ACK Handshake
 	ret = 0;
@@ -112,7 +109,7 @@ sendSYN:
 
 	// Get the SYNACK with seqNum 0
 	getPacket(fd, buf, &len, (struct sockaddr *)&servAddr, &servAddrLen, &seqNum, &wnd, &syn, &fin, &fileStart);
-	if (syn == 1 && seqNum == 0)
+	if (syn == 1 && seqNum == 0 && len == 0)
 		fprintf(stdout, "Receiving packet SYN-ACK\n");
 	else
 	{
@@ -177,9 +174,11 @@ sendFileName:
 		int ACKNum = seqNum + len + HEADER_SIZE;
 		ACKNum %= MAX_SEQ_NUM;
 
-
 		fseek(fp, fileStart, SEEK_SET);
 		fwrite(buf, sizeof(char), len, fp);
+
+		if (totalFileLength < fileStart)
+			totalFileLength = fileStart + MAX_PAYLOAD_SIZE;
 
 		ret = addToTransmitted(transmitted, ACKNum);
 
@@ -241,11 +240,23 @@ sendFIN:
 
 	printf("Entering TIME-WAIT state\n");
 
+	// Get the time when we finish the connection
+	clock_gettime(CLOCK_MONOTONIC_RAW, &endTransfer);
+	int totalTime = (endTransfer.tv_sec - beginTransfer.tv_sec) * 1000 + (endTransfer.tv_nsec - beginTransfer.tv_nsec) / 1000000;
+	// Figure out the average time of each packet by calculating how many data packets and how many handshake packets we had to send
+	int avgRTO = totalTime / (totalFileLength / MAX_PAYLOAD_SIZE + 4);
+	int waitTime;
+	if (RTOTime > avgRTO)
+		waitTime = RTOTime * 4;
+	else
+		waitTime = avgRTO * 4;
+
+
 	int msecElapsed = 0;
 	clock_gettime(CLOCK_MONOTONIC_RAW, &start);
 
 	// During this time period, send ACKs to any last messages
-	while (msecElapsed < RTOTime * 4)
+	while (msecElapsed < waitTime)
 	{
 		// ACK the FIN
 		sendPacket(fd, buf, 0, (struct sockaddr *)&servAddr, servAddrLen, (seqNum + HEADER_SIZE) % MAX_SEQ_NUM, wnd, 0, 0, 0);
@@ -253,7 +264,7 @@ sendFIN:
 
 		clock_gettime(CLOCK_MONOTONIC_RAW, &end);
 		msecElapsed = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000;
-		int timeoutTime = RTOTime * 4 - msecElapsed;
+		int timeoutTime = waitTime - msecElapsed;
 		if (timeoutTime < 0)
 			break;
 

@@ -151,7 +151,7 @@ sendSYNACK:
 getFileName:
 	// Get the name of the requested file
 	recvLen = getPacket(fd, buf, &len, (struct sockaddr *)&clientAddr, &clientAddrLen, &seqNum, &wnd, &syn, &fin, &fileStart);
-	if (syn == 1 || recvLen == 0)
+	if (syn == 1 || len == 0)
 		goto sendSYNACK;
 
 	fprintf(stdout, "Requested File Name: %s\n\n", buf);
