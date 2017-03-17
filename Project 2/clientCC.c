@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
 {
 	// Check for correct argument length
 	if (argc != 4) {
-		fprintf(stderr, "ERROR: incorrect arguments.\nUSAGE: ./client <port> <hostname> <filename>\nSet <ip> to 1 for same machine\n");
+		fprintf(stderr, "ERROR: incorrect arguments.\nUSAGE: ./client <hostname> <port> <filename>\nSet <ip> to 1 for same machine\n");
 		exit(1);
 	}
 
@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
 	int totalFileLength = 0;
 
 	// Get the portnumber
-	portno = atoi(argv[1]);
+	portno = atoi(argv[2]);
 	if (portno < 0)
 	{
 		fprintf(stderr, "ERROR: invalid port number.\n");
@@ -68,7 +68,7 @@ int main(int argc, char *argv[])
 	}
 	
 	struct hostent * server;
-	server = gethostbyname(argv[2]);
+	server = gethostbyname(argv[1]);
 	if(server == NULL)
 	{
 		fprintf(stderr, "ERROR: invalid host name.\n");
