@@ -194,7 +194,7 @@ getFileName:
 	fileContents[fileLen] = '\0';
 
 
-	int maxArrLen = 50;
+	int maxArrLen = 150;
 
 	// Allocate space in the arrays
 	wndSeqs = (int*)malloc(sizeof(int) * maxArrLen);

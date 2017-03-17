@@ -7,4 +7,4 @@ default: client.c server.c
 	$(CC) serverCC.c -o serverCC -lrt
 
 clean:
-	rm server client received.data
+	rm server client serverCC clientCC received.data
